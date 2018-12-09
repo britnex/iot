@@ -1,0 +1,215 @@
+CPULOAD=$(cat <(grep 'cpu ' /proc/stat) <(sleep 1 && grep 'cpu ' /proc/stat) | awk -v RS="" '{print ($13-$2+$15-$4)*100/($13-$2+$15-$4+$16-$5)}' | cut -d. -f1)
+
+MEM=$(awk '/^Mem/ {printf("%u%%", 100*$3/$2);}' <(free -m))
+
+
+
+journalctl --since "1 hour ago"
+
+
+
+cat /etc/systemd/journald.conf 
+
+[Journal]
+SystemMaxUse=50M
+SystemMaxFileSize=10M
+Storage=volatile
+MaxFileSec=1day
+
+
+
+
+DISKSIZEMB=$(( $(lsblk -b --output SIZE -n -d /dev/sda) / 1024 / 1024 ))
+
+DISKSHAREPERMONTH=$(( $DISKSIZEMB / 672 ))
+8760
+
+
+
+#!/bin/bash
+
+renice -n 10 $$ > /dev/null
+
+
+CPULOAD=$(cat <(grep 'cpu ' /proc/stat) <(sleep 1 && grep 'cpu ' /proc/stat) | awk -v RS="" '{print ($13-$2+$15-$4)*100/($13-$2+$15-$4+$16-$5)}' | cut -d. -f1)
+if [[ $CPULOAD -gt 90 ]]; then
+	sleep 5
+	CPULOAD=$(cat <(grep 'cpu ' /proc/stat) <(sleep 1 && grep 'cpu ' /proc/stat) | awk -v RS="" '{print ($13-$2+$15-$4)*100/($13-$2+$15-$4+$16-$5)}' | cut -d. -f1)
+	if [[ $CPULOAD -gt 90 ]]; then
+		exit 1
+	fi
+fi
+
+
+MEM=$(awk '/^Mem/ {printf("%u", 100*$3/$2);}' <(free -m))
+if [[ $MEM -gt 95 ]]; then
+	exit 2
+fi
+
+ETH0NOERRORS=$(ifconfig eth0 | grep "errors:0" | wc -l )
+if [[ $ETH0NOERRORS -ne 2 ]]; then
+	exit 3
+fi
+
+USBCOUNT=$(lsusb | wc -l)
+if [[ $USBCOUNT -lt 5 ]]; then
+	exit 4
+fi
+
+PCIECOUNT=$(lspci | wc -l)
+if [[ $PCIECOUNT -lt 5 ]]; then
+	exit 4
+fi
+
+
+
+exit 0
+
+
+
+
+
+
+
+
+#!/bin/bash
+
+renice -n 10 $$ > /dev/null
+
+cd /
+
+
+rm -rf /tmp/monitoring
+mkdir -p /tmp/monitoring
+
+
+# run command and save to log files
+mkdir -p /tmp/monitoring/bin
+cd /tmp/monitoring/bin
+
+
+cat <<EOF > /tmp/cmds.txt
+uptime
+ps -aux
+top -n 1 -b
+df
+mount
+who
+last
+lsmod
+netstat -a
+smartctl /dev/sda
+uname -a
+ifconfig
+lsusb -vvv
+lspci -vvv
+timedatectl status
+EOF
+
+
+while read cmd; do
+
+        filename=$(echo $cmd | sed -e 's/[^a-z0-9]/_/g' | sed -e 's/__/_/g')
+	$cmd > ${filename} || true
+
+done < /tmp/cmds.txt
+rm -f /tmp/cmds.txt
+
+
+
+# copy files as log files
+cat <<EOF > /tmp/files.txt
+/proc/meminfo
+/proc/interrupts
+/proc/cpuinfo
+/proc/diskstats
+/proc/vmstat
+/proc/softirqs
+EOF
+
+find /sys/class/net/*/statistics >> /tmp/files.txt
+
+while read file; do
+
+	mkdir -p $(dirname "/tmp/monitoring${file}")
+        cp -a "$file" "/tmp/monitoring${file}" || true
+
+done < /tmp/files.txt
+rm -f /tmp/files.txt
+
+
+cd /tmp/monitoring
+tar -czf /tmp/mon.tar.gz -C /tmp/monitoring *
+cd /
+
+rm -rf /tmp/monitoring
+
+
+
+
+
+
+
+
+
+mkdir -p /var/log/
+
+
+
+
+WEEKDAY=$(date '+%A' | tr '[:upper:]' '[:lower:]')
+
+
+
+#!/bin/bash
+
+renice -n 10 $$ > /dev/null
+
+DATE=$(date +'%Y-%m-%d')
+
+BACKUPDIR=/data/var/backups/log
+mkdir -p ${BACKUPDIR}
+
+# delete files older than 7 days
+find ${BACKUPDIR} -mtime +7 -delete
+
+
+# log each unit to one log file
+systemctl list-unit-files --all | grep "\." | cut -d' ' -f1 > /tmp/units.txt
+
+rm -rf /var/log/systemd || true
+mkdir -p /var/log/systemd
+
+while read unit; do
+
+	journalctl -b --since "1 hour ago" -u "${unit}" > "/var/log/systemd/${unit}.log"
+	lines=$(tail -n 3 "/var/log/systemd/${unit}.log" | wc -l)
+	if [[ $lines -eq 1 ]]; then
+		rm -f "/var/log/systemd/${unit}.log"
+	fi
+
+done < /tmp/units.txt
+rm -f /tmp/units.txt || true
+
+
+# all systemd logs in one file
+journalctl -b --since "1 hour ago" > /var/log/systemd.log
+
+
+# backup each log file
+find /var/log -type f > /tmp/logfiles.txt
+while read logfile; do
+	if test -s ${logfile}; then
+		d=$(dirname "${logfile}" | sed -e 's@/var/log@@')
+		f=$(basename "${logfile}")
+
+		mkdir -p "${BACKUPDIR}/${DATE}/${d}"
+		if file "${logfile}" | grep "ASCII text" > /dev/null; then
+			cat "${logfile}" >> "${BACKUPDIR}/${DATE}/${d}/${f}"
+			truncate -s 0 "${logfile}"
+		else
+			cp -a "${logfile}" "${BACKUPDIR}/${DATE}/${d}/${f}"
+		fi
+	fi
+done < /tmp/logfiles.txt
+rm -f /tmp/logfiles.txt || true
