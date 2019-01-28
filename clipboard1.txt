@@ -1,0 +1,18 @@
+if df | grep "/rw$" > /dev/null; then
+	# running in read only mode
+	if test "$reboottypeaufs" = "rw"; then
+		whiptail --yesno "To disable write protection a reboot is required. Reboot now?" 20 60 2
+		if [ $? -eq 0 ]; then
+			reboot-commit-rw
+		fi
+	fi
+
+else
+	# running in read write mode
+	if test "$reboottypeaufs" = "ro"; then
+		whiptail --yesno "To enable write protection a reboot is required. Reboot now?" 20 60 2
+		if [ $? -eq 0 ]; then
+			reboot-ro
+		fi
+	fi
+fi
