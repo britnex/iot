@@ -1,0 +1,34 @@
+ufw default deny incoming
+ufw default allow outgoing
+
+ufw allow ssh
+ufw allow 1194/udp
+
+ufw allow from 10.8.0.0/16 to 10.8.0.1 port 2733 proto tcp
+
+ufw enable
+
+
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+
+
+OVPN_DATA="ovpn-data-iot"
+docker volume create --name $OVPN_DATA
+docker run -v $OVPN_DATA:/etc/openvpn --log-driver=none --rm kylemanna/openvpn ovpn_genconfig -u udp://vpn.<DOMAIN>.com -s 10.8.0.0/16 -d -D
+docker run -v $OVPN_DATA:/etc/openvpn --log-driver=none --rm -it kylemanna/openvpn ovpn_initpki nopass
+
+
+docker run -v $OVPN_DATA:/etc/openvpn -d --name=openvpniot --net=host --cap-add=NET_ADMIN kylemanna/openvpn
+
+
+
+
+docker run -v $OVPN_DATA:/etc/openvpn --log-driver=none --rm -it kylemanna/openvpn easyrsa build-client-full rpi1 nopass
+
+docker run -v $OVPN_DATA:/etc/openvpn --log-driver=none --rm kylemanna/openvpn ovpn_getclient rpi1 > rpi1.ovpn
+
+
+docker swarm init --listen-addr 10.8.0.1:2733 --advertise-addr 10.8.0.1
+
+docker swarm join --token SWgdsfN-1-027qfzgfdgsdfgfsdf5phy3s0 10.8.0.1:2733
